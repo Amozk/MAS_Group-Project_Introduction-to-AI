@@ -4,8 +4,9 @@ from warehouse_map import CELL_SIZE, UP, DOWN, LEFT, RIGHT
 
 COLORS = {
     "#": (40, 40, 40),      # wall
-    "=": (200, 200, 200),  # bidirectional path
-    ".": (180, 180, 255),  # one-way path
+    "=": (200, 200, 200),  # bidirectional aisle
+    ".": (180, 180, 255),  # one-way aisle
+    "+": (255, 255, 150),  # junction
     "S": (100, 255, 100),  # shed
     "P": (255, 180, 100),  # pallet
 }
