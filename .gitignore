@@ -1,0 +1,41 @@
+# Virtual environment
+venv/
+env/
+*/venv/
+*/env/
+
+# Python specific files
+__pycache__/
+*.pyc
+*.swp
+*.egg
+*.egg-info/
+.python-version
+.pytest_cache/
+
+# IDE/OS specific files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.iml
+
+# Data and RL artifacts (specific to this project type)
+data/
+models/
+results/
+logs/
+*.pkl
+*.h5
+*.npy
+*.csv
+*.txt
+
+# Dependency management
+# Only if you want to ignore the lock file, typically you track requirements.txt
+# requirements.lock
+
+# Secrets/credentials (ensure these are not committed)
+.env
+config.yaml
+secrets.json
