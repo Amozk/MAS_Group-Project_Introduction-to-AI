@@ -45,3 +45,25 @@ def draw_agent(screen, x, y, color=(255, 50, 50)):
     cx = x * CELL_SIZE + CELL_SIZE // 2
     cy = y * CELL_SIZE + CELL_SIZE // 2
     pygame.draw.circle(screen, color, (cx, cy), CELL_SIZE // 3)
+
+def draw_path(screen, path, color):
+    """
+    Draws a visual trail for the agent's planned path.
+    """
+    if not path or len(path) < 2:
+        return
+
+    # Create a list of pixel coordinates for the center of each tile
+    pixel_points = []
+    for (gx, gy) in path:
+        cx = gx * CELL_SIZE + CELL_SIZE // 2
+        cy = gy * CELL_SIZE + CELL_SIZE // 2
+        pixel_points.append((cx, cy))
+
+    # Draw lines connecting the points
+    # width=2 makes it a thin, unobtrusive line
+    pygame.draw.lines(screen, color, False, pixel_points, width=2)
+    
+    # Optional: Draw tiny dots at each step to see discrete tiles
+    for (cx, cy) in pixel_points:
+        pygame.draw.circle(screen, color, (cx, cy), 3)

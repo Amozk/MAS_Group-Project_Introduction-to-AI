@@ -7,7 +7,7 @@ CELL_SIZE = 30  # pixels
 
 WALL = "#"
 BIDIR = "="
-ONEWAY = "."
+ONEWAY = "."    # Not used in current map
 JUNCTION = "+"
 SHED = "S"
 PALLET = "P"
@@ -27,11 +27,11 @@ def build_map():
             grid[y][x] = BIDIR
             allowed_moves[(x, y)] = {UP, DOWN}
 
-    # Outer paths Corners as junctions
-    grid[1][1] = JUNCTION               # Top-left
-    grid[1][WIDTH-2] = JUNCTION         # Top-right
-    grid[HEIGHT-2][1] = JUNCTION        # Bottom-left
-    grid[HEIGHT-2][WIDTH-2] = JUNCTION  # Bottom-right
+    # Outer paths Corners
+    grid[1][1] = BIDIR               # Top-left
+    grid[1][WIDTH-2] = BIDIR         # Top-right
+    grid[HEIGHT-2][1] = BIDIR        # Bottom-left
+    grid[HEIGHT-2][WIDTH-2] = BIDIR  # Bottom-right
 
     allowed_moves[(1, 1)] = {RIGHT, DOWN}
     allowed_moves[(WIDTH-2, 1)] = {LEFT, DOWN}
@@ -39,11 +39,11 @@ def build_map():
     allowed_moves[(WIDTH-2, HEIGHT-2)] = {LEFT, UP}
 
     # Inner paths
-    # Horizontal aisles (bidirectional)
+    # Horizontal aisles
     for y in range(4, HEIGHT-4, 4):
         for x in range(2, WIDTH-2):
-            grid[y][x] = BIDIR
-            grid[y+1][x] = BIDIR
+            grid[y][x] = JUNCTION
+            grid[y+1][x] = JUNCTION
             allowed_moves[(x, y)] = {LEFT, RIGHT, UP, DOWN}
             allowed_moves[(x, y+1)] = {LEFT, RIGHT, UP, DOWN}
 
@@ -65,19 +65,19 @@ def build_map():
         allowed_moves[(WIDTH-2, y)] = {UP, DOWN, LEFT}
         allowed_moves[(WIDTH-2, y+1)] = {UP, DOWN, LEFT}
 
-    # Pallet access points (one-way)
+    # Pallet access points
     for y in range(2, HEIGHT-2, 4):
         for x in range(2, WIDTH-2):
             grid[y][x] = PALLET
             grid[y+1][x] = PALLET
-            allowed_moves[(x, y)] = set()
-            allowed_moves[(x, y+1)] = set()
+            allowed_moves[(x, y)] = {UP}
+            allowed_moves[(x, y+1)] = {DOWN}
 
-    # Vertical aisles (bidirectional)
+    # Vertical aisles
     for y in range(4, HEIGHT-2):
-            grid[y][WIDTH // 2 - 1] = BIDIR
+            grid[y][WIDTH // 2 - 1] = JUNCTION
             allowed_moves[(WIDTH // 2 - 1, y)] = {UP, DOWN, RIGHT}
-            grid[y][WIDTH // 2] = BIDIR
+            grid[y][WIDTH // 2] = JUNCTION
             allowed_moves[(WIDTH // 2, y)] = {UP, DOWN, LEFT}
 
     # Middle Junctions
@@ -91,15 +91,68 @@ def build_map():
         allowed_moves[(WIDTH // 2, y)] = {UP, DOWN, RIGHT, LEFT}
         allowed_moves[(WIDTH // 2, y+1)] = {UP, DOWN, RIGHT, LEFT}
 
-    # Minor Adjustment
-    grid[4][WIDTH // 2 - 1] = JUNCTION
-    allowed_moves[(WIDTH // 2 - 1, 4)] = {DOWN, RIGHT, LEFT}
-    grid[4][WIDTH // 2] = JUNCTION
-    allowed_moves[(WIDTH // 2, 4)] = {DOWN, RIGHT, LEFT}
-
     # Loading shed
     grid[HEIGHT-2][WIDTH // 2 - 1], grid[HEIGHT-2][WIDTH // 2] = SHED, SHED
     allowed_moves[(WIDTH // 2 - 1, HEIGHT-2)] = {LEFT, RIGHT, UP}
     allowed_moves[(WIDTH // 2, HEIGHT-2)] = {LEFT, RIGHT, UP}
 
     return grid, allowed_moves
+
+def build_sectors(grid):
+    """
+    Assign a sector ID to each pallet access point.
+    Splits rows into Left and Right sectors.
+    
+    - Top rows (Sector 0, 1): Include x=13, x=14 because they are 'P'.
+    - Other rows (Sector 2+): Exclude x=13, x=14 because they are '+'.
+    """
+    sector_map = {}
+    sector_id = 0
+    visited_rows = set()
+    
+    rows = len(grid)
+    cols = len(grid[0])
+    mid_point = cols // 2  # 14
+    
+    # We scan specifically from column 2 to 26 (width-2)
+    # The ranges below are key:
+    # Left:  2 to 14 (indices 2..13)
+    # Right: 14 to 26 (indices 14..25)
+
+    for y in range(rows):
+        if y in visited_rows:
+            continue
+
+        # Check if this row is part of a Pallet group
+        if any(grid[y][x] == "P" for x in range(cols)):
+            
+            # Identify the pair of rows (e.g., 2 and 3)
+            row_pair = [r for r in [y, y + 1] if r < rows]
+            
+            # --- LEFT SECTOR ---
+            left_found = False
+            for r in row_pair:
+                # Scan up to mid_point (14) so we include index 13
+                for x in range(2, mid_point): 
+                    if grid[r][x] == "P":
+                        sector_map[(x, r)] = sector_id
+                        left_found = True
+            
+            if left_found:
+                sector_id += 1
+
+            # --- RIGHT SECTOR ---
+            right_found = False
+            for r in row_pair:
+                # Scan starting from mid_point (14) so we include index 14
+                for x in range(mid_point, cols - 2): 
+                    if grid[r][x] == "P":
+                        sector_map[(x, r)] = sector_id
+                        right_found = True
+
+            if right_found:
+                sector_id += 1
+
+            visited_rows.update(row_pair)
+
+    return sector_map
