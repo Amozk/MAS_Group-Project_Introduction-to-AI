@@ -1,5 +1,5 @@
 # Warehouse Multi-Agent System (MAS) Project
-
+![Image](https://github.com/user-attachments/assets/f992f546-2b09-4fbc-8ab8-2205def1a2c8)
 ## Overview
 
 This project implements a Multi-Agent System (MAS) for warehouse management using reinforcement learning. Agents collaborate to optimize task allocation, pathfinding, and resource utilization in a simulated warehouse environment. The system uses PPO (Proximal Policy Optimization) for training agents through curriculum learning.
