@@ -40,22 +40,20 @@ def build_map():
 
     # Inner paths
     # Horizontal aisles
-    for y in range(4, HEIGHT-4, 4):
+    for y in range(2, HEIGHT, 4):
         for x in range(2, WIDTH-2):
             grid[y][x] = JUNCTION
             grid[y+1][x] = JUNCTION
             allowed_moves[(x, y)] = {LEFT, RIGHT, UP, DOWN}
             allowed_moves[(x, y+1)] = {LEFT, RIGHT, UP, DOWN}
 
-    # Pickup entry at top and bottom outer paths
+    # Bottom path adjacent to wall
     for x in range(2, WIDTH-2):
-        grid[1][x] = JUNCTION
         grid[HEIGHT-2][x] = JUNCTION
-        allowed_moves[(x, 1)] = {LEFT, RIGHT, DOWN}
         allowed_moves[(x, HEIGHT-2)] = {LEFT, RIGHT, UP}
 
     # Side junctions
-    for y in range(4, HEIGHT-4, 4):
+    for y in range(2, HEIGHT-2, 4):
         grid[y][1] = JUNCTION
         grid[y+1][1] = JUNCTION
         grid[y][WIDTH-2] = JUNCTION
@@ -66,7 +64,7 @@ def build_map():
         allowed_moves[(WIDTH-2, y+1)] = {UP, DOWN, LEFT}
 
     # Pallet access points
-    for y in range(2, HEIGHT-2, 4):
+    for y in range(0, HEIGHT-2, 4):
         for x in range(2, WIDTH-2):
             grid[y][x] = PALLET
             grid[y+1][x] = PALLET
@@ -81,7 +79,7 @@ def build_map():
             allowed_moves[(WIDTH // 2, y)] = {UP, DOWN, LEFT}
 
     # Middle Junctions
-    for y in range(4, HEIGHT-4, 4):
+    for y in range(2, HEIGHT-2, 4):
         grid[y][WIDTH // 2 - 1] = JUNCTION
         grid[y+1][WIDTH // 2 - 1] = JUNCTION
         grid[y][WIDTH // 2] = JUNCTION
@@ -96,63 +94,82 @@ def build_map():
     allowed_moves[(WIDTH // 2 - 1, HEIGHT-2)] = {LEFT, RIGHT, UP}
     allowed_moves[(WIDTH // 2, HEIGHT-2)] = {LEFT, RIGHT, UP}
 
+    # Minor adjustment
+    for x in range(0, WIDTH):
+        grid[0][x] = WALL
+        allowed_moves.pop((x, 0), None)
+
     return grid, allowed_moves
 
 def build_sectors(grid):
     """
-    Assign a sector ID to each pallet access point.
-    Splits rows into Left and Right sectors.
-    
-    - Top rows (Sector 0, 1): Include x=13, x=14 because they are 'P'.
-    - Other rows (Sector 2+): Exclude x=13, x=14 because they are '+'.
+    Custom Sector Definition based on User Coordinates.
+    - Row 1: Full width (meets in middle).
+    - Row 2-4: Gap in middle (Cols 13, 14 free).
     """
     sector_map = {}
     sector_id = 0
-    visited_rows = set()
+    rows = len(grid)     # 18
+    cols = len(grid[0])  # 28
     
-    rows = len(grid)
-    cols = len(grid[0])
-    mid_point = cols // 2  # 14
+    # Define your 4 specific "Aisle" groups (The walking paths)
+    # Format: (y_start, y_end, x_left_end, x_right_start)
+    # Note: Python ranges are exclusive at the end, so we add +1 to the end index.
     
-    # We scan specifically from column 2 to 26 (width-2)
-    # The ranges below are key:
-    # Left:  2 to 14 (indices 2..13)
-    # Right: 14 to 26 (indices 14..25)
+    definitions = [
+        # Row 1 (y=2 to 3): Left 2-13, Right 14-End
+        {"y_range": (2, 4), "left_x": (2, 14), "right_x": (14, cols-2)},
+        
+        # Row 2 (y=6 to 7): Left 2-12, Right 15-End (Gap in middle)
+        {"y_range": (6, 8), "left_x": (2, 13), "right_x": (15, cols-2)},
+        
+        # Row 3 (y=10 to 11): Left 2-12, Right 15-End (Gap in middle)
+        {"y_range": (10, 12), "left_x": (2, 13), "right_x": (15, cols-2)},
+        
+        # Row 4 (y=14 to 15): Left 2-12, Right 15-End (Gap in middle)
+        {"y_range": (14, 16), "left_x": (2, 13), "right_x": (15, cols-2)},
+    ]
 
-    for y in range(rows):
-        if y in visited_rows:
-            continue
+    for definition in definitions:
+        y_start, y_end = definition["y_range"]
+        
+        # === LEFT SECTOR ===
+        lx_start, lx_end = definition["left_x"]
+        has_items = False
+        
+        # 1. Map the Aisle (Walking Path)
+        for y in range(y_start, y_end):
+            for x in range(lx_start, lx_end):
+                sector_map[(x, y)] = sector_id
+                has_items = True
+                
+                # 2. Map the Pallets ABOVE and BELOW this tile
+                # Check y-1 (Top Pallet) and y+2 (Bottom Pallet relative to start)
+                # We simply check neighbors vertically
+                for check_y in [y-1, y+1]: # Check immediate neighbors
+                    if 0 <= check_y < rows:
+                        if grid[check_y][x] == "P":
+                            sector_map[(x, check_y)] = sector_id
 
-        # Check if this row is part of a Pallet group
-        if any(grid[y][x] == "P" for x in range(cols)):
-            
-            # Identify the pair of rows (e.g., 2 and 3)
-            row_pair = [r for r in [y, y + 1] if r < rows]
-            
-            # --- LEFT SECTOR ---
-            left_found = False
-            for r in row_pair:
-                # Scan up to mid_point (14) so we include index 13
-                for x in range(2, mid_point): 
-                    if grid[r][x] == "P":
-                        sector_map[(x, r)] = sector_id
-                        left_found = True
-            
-            if left_found:
-                sector_id += 1
+        if has_items:
+            sector_id += 1
 
-            # --- RIGHT SECTOR ---
-            right_found = False
-            for r in row_pair:
-                # Scan starting from mid_point (14) so we include index 14
-                for x in range(mid_point, cols - 2): 
-                    if grid[r][x] == "P":
-                        sector_map[(x, r)] = sector_id
-                        right_found = True
+        # === RIGHT SECTOR ===
+        rx_start, rx_end = definition["right_x"]
+        has_items = False
+        
+        for y in range(y_start, y_end):
+            for x in range(rx_start, rx_end):
+                sector_map[(x, y)] = sector_id
+                has_items = True
+                
+                # Map Pallets
+                for check_y in [y-1, y+1]:
+                    if 0 <= check_y < rows:
+                        if grid[check_y][x] == "P":
+                            sector_map[(x, check_y)] = sector_id
 
-            if right_found:
-                sector_id += 1
-
-            visited_rows.update(row_pair)
+        if has_items:
+            sector_id += 1
 
     return sector_map

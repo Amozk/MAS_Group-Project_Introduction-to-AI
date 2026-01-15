@@ -67,8 +67,12 @@ class WarehouseEnv(gym.Env):
         super().reset(seed=seed)
         
         # 1. Regenerate Tasks
-        all_pallet_locs = [p for p in list(self.sector_map.keys()) if p not in self.shed_tiles]
-        self.task_queue = [random.choice(all_pallet_locs) for _ in range(0)]
+        all_sector_locs = list(self.sector_map.keys())
+        all_pallet_locs = [
+            (x, y) for (x, y) in all_sector_locs 
+            if self.grid[y][x] == "P" and (x, y) not in self.shed_tiles
+        ]
+        self.task_queue = [random.choice(all_pallet_locs) for _ in range(100)]
         
         # 2. Reset Agents
         self.agents = []

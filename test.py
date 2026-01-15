@@ -12,7 +12,7 @@ def run_interactive_simulation():
     env = WarehouseEnv(render_mode="human", num_agents=4)
 
     # 2. Load the Model
-    model_path = "models/PPO/warehouse_opt_100k" 
+    model_path = "models/PPO/warehouse_final_mas" 
     model = None
 
     try:
