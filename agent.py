@@ -63,15 +63,20 @@ class Agent:
                     self.timer = 20
                 return None
             else:
+                # --- NEW FIX: Don't pathfind if we don't have a target! ---
+                if self.target is None:
+                    self.state = "IDLE"
+                    return None
+                # ----------------------------------------------------------
+
                 # We are lost (maybe just yielded?) -> Re-calculate path to target
-                # This ensures we don't just stop after stepping aside.
                 path = a_star_search(self.pos, self.target, allowed_moves)
                 if path:
                     self.path = path
                     self.state = "MOVE"
                 else:
                     self.state = "IDLE"
-                    return None 
+                    return None
 
         next_pos = self.path[0]
         

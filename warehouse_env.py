@@ -68,7 +68,7 @@ class WarehouseEnv(gym.Env):
         
         # 1. Regenerate Tasks
         all_pallet_locs = [p for p in list(self.sector_map.keys()) if p not in self.shed_tiles]
-        self.task_queue = [random.choice(all_pallet_locs) for _ in range(1)]
+        self.task_queue = [random.choice(all_pallet_locs) for _ in range(0)]
         
         # 2. Reset Agents
         self.agents = []
@@ -115,12 +115,16 @@ class WarehouseEnv(gym.Env):
         for agent in self.agents:
             if agent.pos[0] < -50: continue # Skip Phantoms
             
-            if agent.task_complete:
-                total_reward += 10.0 
+            # --- FIX: HIRE UNEMPLOYED AGENTS ---
+            # Condition A: Agent finished a task (task_complete)
+            # Condition B: Agent is sitting idle with no target (Unemployed / Initial State)
+            is_unemployed = (agent.state == "IDLE" and agent.target is None)
+            
+            if agent.task_complete or is_unemployed:
+                total_reward += 10.0 if agent.task_complete else 0 # Only reward finishing work
                 
-                # If agent finished a task, go to Shed
+                # If agent finished a task (or is unemployed), go to Shed
                 if agent.pos not in self.shed_tiles:
-                    # Find the CLOSEST shed tile to avoid crossing paths
                     closest_shed = min(self.shed_tiles, key=lambda p: abs(p[0]-agent.pos[0]) + abs(p[1]-agent.pos[1]))
                     agent.set_target(closest_shed, self.allowed_moves)
                 else:
