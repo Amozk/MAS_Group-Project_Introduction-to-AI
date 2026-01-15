@@ -6,7 +6,7 @@ import gymnasium as gym
 from gymnasium import spaces
 
 from warehouse_map import build_map, build_sectors, WIDTH, HEIGHT, CELL_SIZE
-from visualizer import draw_grid, draw_agent
+from visualizer import draw_grid, draw_agent, draw_path
 from agent import Agent
 
 # AGENT COLORS:
@@ -20,29 +20,39 @@ AGENT_COLORS = [
 class WarehouseEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 10}
 
-    def __init__(self, render_mode=None, num_agents=4):
+    def __init__(self, render_mode=None, num_agents=4, active_agents=None):
         super().__init__()
         
         # --- Map Setup ---
         self.grid, self.allowed_moves = build_map()
         self.sector_map = build_sectors(self.grid)
         self.shed_pos = (WIDTH // 2, HEIGHT - 2)
+        self.shed_tiles = [
+            (WIDTH // 2 - 1, HEIGHT - 2), 
+            (WIDTH // 2, HEIGHT - 2)
+        ]
         
         # --- Dimensions ---
         self.width = WIDTH
         self.height = HEIGHT
         self.cell_size = CELL_SIZE
         self.num_agents = num_agents
+
+        self.active_agents = active_agents if active_agents is not None else num_agents
         
-        # --- RL Spaces (Definitions) ---
-        # Observation: For simplicity, let's just observe Agent Positions for now
-        # Shape: [Num_Agents, 2] -> [[x1,y1], [x2,y2]...]
+        # --- IMPROVEMENT 2: SMARTER EYES (Relative Coordinates) ---
+        # 1. Agent Positions: [x, y] * num_agents
+        # 2. Task Vectors: [dx, dy] relative to Shed * 3 tasks
+        # Previous size was (num_agents * 2) + 3. 
+        # New size is (num_agents * 2) + 6.
+        obs_size = (num_agents * 2) + 6 
+        
+        # We allow negative values now (relative vectors can be negative)
         self.observation_space = spaces.Box(
-            low=0, high=max(WIDTH, HEIGHT), shape=(num_agents, 2), dtype=np.float32
+            low=-max(WIDTH, HEIGHT), high=max(WIDTH, HEIGHT), shape=(obs_size,), dtype=np.float32
         )
         
-        # Action: A placeholder. 
-        # 0 = Default (Heuristic), 1 = Force Wait, 2 = Force Reroute (Example)
+        # Action Space stays the same (Pick Index 0, 1, or 2)
         self.action_space = spaces.Discrete(3)
 
         # --- Simulation State ---
@@ -57,8 +67,8 @@ class WarehouseEnv(gym.Env):
         super().reset(seed=seed)
         
         # 1. Regenerate Tasks
-        all_pallet_locs = list(self.sector_map.keys())
-        self.task_queue = [random.choice(all_pallet_locs) for _ in range(100)]
+        all_pallet_locs = [p for p in list(self.sector_map.keys()) if p not in self.shed_tiles]
+        self.task_queue = [random.choice(all_pallet_locs) for _ in range(1)]
         
         # 2. Reset Agents
         self.agents = []
@@ -67,35 +77,54 @@ class WarehouseEnv(gym.Env):
             (8, self.height - 2), (19, self.height - 2)
         ]
         
-        # Handle case if num_agents > spawn_points
         for i in range(self.num_agents):
-            pos = spawn_points[i % len(spawn_points)]
-            self.agents.append(Agent(i, pos))
+            # LOGIC: If agent index is >= active_agents, hide them!
+            if i < self.active_agents:
+                pos = spawn_points[i % len(spawn_points)]
+                self.agents.append(Agent(i, pos))
+            else:
+                # Phantom Agents: Place them far off-screen so they don't block anyone
+                # They exist for the 'Brain Shape' but do nothing.
+                self.agents.append(Agent(i, (-100, -100))) 
             
-        # 3. Initial Dispatch
+        # 3. Initial Dispatch (Only for active agents)
         for agent in self.agents:
-            if self.task_queue:
-                target = self.task_queue.pop(0)
-                agent.set_target(target, self.allowed_moves)
+            if agent.pos[0] > -50: # Check if agent is on screen
+                if self.task_queue:
+                    target = self.task_queue.pop(0)
+                    agent.set_target(target, self.allowed_moves)
                 
         self.sector_occupancy = {}
         
         return self._get_obs(), {}
 
     def step(self, action):
-        total_reward = 0
         terminated = False
         truncated = False
-        
+
+        total_reward = 0
         total_reward -= 0.01 * self.num_agents
 
-        # --- 1. DISPATCHER LOGIC (Keep as is) ---
+        # --- 0. WAKE UP LOGIC (For Interactive Mode) ---
         for agent in self.agents:
+            if agent.state == "TERMINATED" and self.task_queue:
+                agent.state = "IDLE"
+                agent.task_complete = True 
+        
+        # --- 1. DISPATCHER LOGIC (Optimized) ---
+        for agent in self.agents:
+            if agent.pos[0] < -50: continue # Skip Phantoms
+            
             if agent.task_complete:
                 total_reward += 10.0 
-                if agent.pos != self.shed_pos:
-                    agent.set_target(self.shed_pos, self.allowed_moves)
+                
+                # If agent finished a task, go to Shed
+                if agent.pos not in self.shed_tiles:
+                    # Find the CLOSEST shed tile to avoid crossing paths
+                    closest_shed = min(self.shed_tiles, key=lambda p: abs(p[0]-agent.pos[0]) + abs(p[1]-agent.pos[1]))
+                    agent.set_target(closest_shed, self.allowed_moves)
                 else:
+                    # If at shed, get new task
                     if self.task_queue:
                         idx = action
                         if idx >= len(self.task_queue): idx = 0
@@ -104,125 +133,183 @@ class WarehouseEnv(gym.Env):
                     else:
                         agent.state = "TERMINATED"
                         agent.path = []
+                
                 agent.task_complete = False
 
-        # --- 2. MOVEMENT LOOP ---
+        # --- 2. MOVEMENT LOOP (With Reward Shaping) ---
         for agent in self.agents:
-            if agent.state == "WAIT": total_reward -= 0.5
+            if agent.pos[0] < -50: continue # Skip Phantoms
+
+            if agent.state == "TERMINATED":
+                continue
+
             if agent.state == "LOADING":
                 agent.update()
                 continue
-            if not agent.path: continue
-
-            next_step_idx = 0
-            if len(agent.path) > 1 and agent.path[0] == agent.pos:
-                next_step_idx = 1
             
-            if next_step_idx < len(agent.path):
-                next_pos = agent.path[next_step_idx]
-                curr_sec = self.sector_map.get(agent.pos)
-                next_sec = self.sector_map.get(next_pos)
-                
+            # --- REWARD SHAPING ADDITION (START) ---
+            # 1. Calculate Distance BEFORE Moving
+            prev_dist = 0
+            if agent.target:
+                prev_dist = abs(agent.pos[0] - agent.target[0]) + abs(agent.pos[1] - agent.target[1])
+            # ---------------------------------------
+
+            # ASK THE AGENT: "Where do you want to go?"
+            next_pos = agent.negotiate_move(self.allowed_moves, self.agents, self.shed_tiles)
+            
+            if next_pos:
                 can_move = True
                 
-                # CHECK A: Sector Manager
-                if next_sec is not None and next_sec != curr_sec:
-                    owner = self.sector_occupancy.get(next_sec)
-                    if owner is not None and owner != agent.id:
-                        can_move = False
-                        agent.state = "WAIT"
-                
-                # CHECK B: Physical Collision + REROUTE FIX
-                if can_move:
+                # A. SAFETY NET: Physical Collision
+                if next_pos not in self.shed_tiles:
                     for other in self.agents:
                         if other.id != agent.id and other.pos == next_pos:
                             can_move = False
-                            agent.state = "WAIT"
-                            
-                            # --- THE FIX: COIN FLIP ---
-                            # 50% chance to be "Optimistic" (Try to go around)
-                            # 50% chance to be "Pessimistic" (Just wait and hope they move)
-                            if random.random() < 0.5:
-                                # "Excuse me, coming through!"
-                                agent.reroute(next_pos, self.allowed_moves)
-                            else:
-                                # "I'll just wait here."
-                                # We do NOT reroute, keeping the original path.
-                                pass
-                            
                             break
-
-                # --- CHECK C: LANE LOCKING (Expanded for Side Aisles) ---
-                if can_move:
-                    # Fix: Include Side Lanes (1, WIDTH-2) AND Center Lanes
-                    critical_lanes = [1, self.width - 2, self.width // 2 - 1, self.width // 2]
-                    
-                    if agent.pos[0] not in critical_lanes and next_pos[0] in critical_lanes:
-                        target_lane_x = next_pos[0]
-                        for other in self.agents:
-                            if other.id != agent.id:
-                                if other.pos[0] == target_lane_x:
-                                    can_move = False
-                                    agent.state = "WAIT"
-                                    break
                 
-                # EXECUTE MOVE
+                # B. SECTOR MANAGER
+                curr_sec = self.sector_map.get(agent.pos)
+                next_sec = self.sector_map.get(next_pos)
+                
+                if next_sec is not None and next_sec != curr_sec:
+                    if next_pos not in self.shed_tiles: 
+                        owner = self.sector_occupancy.get(next_sec)
+                        if owner is not None and owner != agent.id:
+                            can_move = False
+                
                 if can_move:
-                    if agent.state == "WAIT": agent.state = "MOVE"
+                    # Update Sector Manager
                     if curr_sec is not None and curr_sec != next_sec:
                         if self.sector_occupancy.get(curr_sec) == agent.id:
                             del self.sector_occupancy[curr_sec]
+                    
                     if next_sec is not None:
-                        self.sector_occupancy[next_sec] = agent.id
-                    agent.update()
+                        if next_pos not in self.shed_tiles:
+                            self.sector_occupancy[next_sec] = agent.id
+                    
+                    # Commit the move
+                    agent.pos = next_pos
+                
+                agent.update()
 
-        if all(a.state == "TERMINATED" for a in self.agents):
+            # --- REWARD SHAPING ADDITION (END) ---
+
+            # C. Calculate Distance AFTER Moving & Apply Reward
+            if agent.target:
+                curr_dist = abs(agent.pos[0] - agent.target[0]) + abs(agent.pos[1] - agent.target[1])
+                
+                if curr_dist < prev_dist:
+                    total_reward += 0.1  # Reward: Got closer!
+                elif curr_dist > prev_dist:
+                    total_reward -= 0.1  # Penalty: Moved away (or was forced to yield)
+                
+                # Note: If dist is same (waiting), the standard time penalty (-0.01) applies
+
+        active_list = [a for a in self.agents if a.pos[0] > -50]
+        if all(a.state == "TERMINATED" for a in active_list):
             terminated = True
             
         return self._get_obs(), total_reward, terminated, truncated, {}
 
     def _get_obs(self):
-        # Return simple coordinate list as observation
-        obs = np.array([a.pos for a in self.agents], dtype=np.float32)
-        return obs
+        # 1. Agent Positions (Absolute is fine, traffic awareness)
+        agent_locs = np.array([a.pos for a in self.agents], dtype=np.float32).flatten()
+        
+        # 2. Task Vectors (Relative to Shed)
+        # We want the Brain to know: "Task A is 10 steps Left (-10), Task B is 2 steps Right (+2)"
+        # Since dispatching happens at the Shed, we measure from self.shed_pos.
+        task_vectors = []
+        shed_x, shed_y = self.shed_pos
+        
+        for i in range(3): # Look at next 3 tasks
+            if i < len(self.task_queue):
+                t_pos = self.task_queue[i]
+                
+                # VECTOR MATH: Target - Current
+                dx = t_pos[0] - shed_x
+                dy = t_pos[1] - shed_y
+                
+                task_vectors.extend([dx, dy])
+            else:
+                # No task available? Give (0,0) - Effectively "Right here" (or done)
+                task_vectors.extend([0, 0])
+        
+        # Combine: [Ag1_x, Ag1_y, ... , Task1_dx, Task1_dy, Task2_dx...]
+        return np.concatenate([agent_locs, np.array(task_vectors, dtype=np.float32)])
 
     def render(self):
         if self.render_mode == "human":
             if self.window is None:
                 pygame.init()
+                pygame.font.init() # Init font for debug text
                 self.window = pygame.display.set_mode((self.width * self.cell_size, self.height * self.cell_size))
-                pygame.display.set_caption("Warehouse RL Environment")
+                pygame.display.set_caption("Warehouse MAS Debugger")
                 self.clock = pygame.time.Clock()
+                self.font = pygame.font.SysFont("Arial", 12) # Small font
             
-            self.window.fill((0, 0, 0))
+            self.window.fill((30, 30, 30)) # Dark background
             draw_grid(self.window, self.grid, self.allowed_moves)
 
-            # --- NEW: DRAW PATHS FIRST ---
+            # 1. Draw Targets (White Boxes)
+            pending_locations = set(self.task_queue)
+            for (tx, ty) in pending_locations:
+                cx = tx * self.cell_size + self.cell_size // 2
+                cy = ty * self.cell_size + self.cell_size // 2
+                pygame.draw.rect(self.window, (255, 255, 255), (cx - 4, cy - 4, 10, 10))
+
+            if self.task_queue:
+                nx, ny = self.task_queue[0]
+                cx = nx * self.cell_size + self.cell_size // 2
+                cy = ny * self.cell_size + self.cell_size // 2
+                pygame.draw.circle(self.window, (0, 255, 255), (cx, cy), 6, width=2)
+
+            # 2. Draw Agents & Debug Info
             for agent in self.agents:
-                # Pick a color based on ID (Red vs Blueish)
-                # We make it slightly dimmer or distinct from the agent body
-                base_color = AGENT_COLORS[agent.id]
+                if agent.pos[0] < -50: continue # Skip Phantoms
                 
-                # If waiting, maybe show path in Yellow?
-                if agent.state == "WAIT":
-                    base_color = (200, 200, 50)
-                
-                # Draw the trail
-                from visualizer import draw_path # Import locally or at top
-                draw_path(self.window, agent.path, base_color)
-            
-            for agent in self.agents:
+                # A. Draw Path Line (Trace)
+                if agent.path:
+                    points = [(p[0] * self.cell_size + self.cell_size//2, p[1] * self.cell_size + self.cell_size//2) for p in [agent.pos] + agent.path]
+                    if len(points) > 1:
+                        pygame.draw.lines(self.window, AGENT_COLORS[agent.id], False, points, 2)
+
+                # B. Draw Target Line (Direct line to goal)
+                if agent.target:
+                    start = (agent.pos[0] * self.cell_size + self.cell_size//2, agent.pos[1] * self.cell_size + self.cell_size//2)
+                    end = (agent.target[0] * self.cell_size + self.cell_size//2, agent.target[1] * self.cell_size + self.cell_size//2)
+                    # Thin dotted line color based on state
+                    line_col = (100, 100, 100) 
+                    pygame.draw.line(self.window, line_col, start, end, 1)
+
+                # C. Draw Agent Body
                 color = AGENT_COLORS[agent.id]
                 if agent.state == "WAIT": color = (255, 255, 0)
                 elif agent.state == "LOADING": color = (0, 255, 0)
                 elif agent.state == "TERMINATED": color = (100, 100, 100)
-                draw_agent(self.window, agent.pos[0], agent.pos[1], color)
                 
-            # Draw Sector Locks
-            for pos, sid in self.sector_map.items():
-                if sid in self.sector_occupancy:
-                    px, py = pos[0] * self.cell_size + 5, pos[1] * self.cell_size + 5
-                    pygame.draw.rect(self.window, (255, 0, 0), (px, py, 5, 5))
+                cx = agent.pos[0] * self.cell_size + self.cell_size // 2
+                cy = agent.pos[1] * self.cell_size + self.cell_size // 2
+                pygame.draw.circle(self.window, color, (cx, cy), self.cell_size // 2 - 2)
+                
+                # --- DEBUG FEATURE 1: PATIENCE BAR ---
+                # Draw a small bar above agent head
+                if hasattr(agent, 'patience') and hasattr(agent, 'max_patience'):
+                    bar_width = 20
+                    bar_height = 4
+                    fill_pct = agent.patience / agent.max_patience
+                    bar_x = cx - bar_width // 2
+                    bar_y = cy - 20
+                    
+                    # Background (Red)
+                    pygame.draw.rect(self.window, (255, 0, 0), (bar_x, bar_y, bar_width, bar_height))
+                    # Foreground (Green)
+                    pygame.draw.rect(self.window, (0, 255, 0), (bar_x, bar_y, bar_width * fill_pct, bar_height))
+
+                # --- DEBUG FEATURE 2: STATE ID ---
+                # Draw letter "W" (Wait), "L" (Load), "M" (Move)
+                state_char = agent.state[0]
+                text = self.font.render(state_char, True, (0, 0, 0))
+                self.window.blit(text, (cx - 3, cy - 8))
 
             pygame.display.flip()
             self.clock.tick(self.metadata["render_fps"])
